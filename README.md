@@ -33,10 +33,12 @@ leaves work in the tree and reports it. An optional search guard nudges toward
 codebase-memory over raw grep. Session records for the last 10 sessions land in
 `infra-llm/sessions/`.
 
-**Opt-in skills.** `infra-llm --designer` (UI: impeccable + motion + a
-real-browser check) and `infra-llm --code` (clean code, security, performance)
-install per repo and list themselves in the instruction block's `# Skills`
-section, which tracks exactly what's installed.
+**Opt-in skills.** `infra-llm --global` installs every skill machine-wide,
+including `infra-llm-designer` (UI: impeccable + motion + a real-browser check)
+and `infra-llm-code` (clean code, security, performance). A repo opts in with
+`infra-llm --designer` / `--code`, which adds one line to the instruction block's
+`# Skills` section — that line is the whole record, so nothing is generated in
+the repo and the opt-in travels with the clone.
 
 ## Commands
 

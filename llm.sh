@@ -20,21 +20,22 @@
 #   infra-llm --sessions [id]   # list/print session records
 #   infra-llm --worktrees       # every worktree with its own plan state
 #   infra-llm --skill [name]    # print a skill (infra-llm-designer / -code)
-#   infra-llm --designer        # add the design skill here (--remove to drop it)
-#   infra-llm --code            # add the code-quality skill here (--remove to drop it)
+#   infra-llm --designer        # list the design skill here (--remove to drop it)
+#   infra-llm --code            # list the code-quality skill here (--remove to drop it)
 #   infra-llm --hook <name>     # run a hook (used by the wiring, not by hand)
 #   infra-llm --uninstall       # remove wiring + instruction blocks again
 #
 # Three scopes. --global installs the machine-wide layer into Claude Code's own
-# config dir ($CLAUDE_CONFIG_DIR, else ~/.claude): the hooks and the /infra-llm-*
-# commands. The step protocol lives in /infra-llm-plan and the instruction block,
-# not a global skill; the designer/code skills are opt-in per repo. Updating this
-# checkout updates every repo. --init prepares one repo: infra-llm/ (plans and
-# sessions), .infra-llm.env, the ignore entries that keep both out of git and
-# out of any other ignore file the repo already has (appended to, never
-# created), and the instruction block. --agent wires the repo to carry the
-# hooks itself - for a machine with no --global install, or a repo teammates and
-# CI clone and must get the workflow with.
+# config dir ($CLAUDE_CONFIG_DIR, else ~/.claude): the hooks, the /infra-llm-*
+# commands and every skill, designer and code included. Nothing is generated in a
+# repo - a repo opts into a domain skill by listing it in its instruction block
+# (`--designer` / `--code`), so there is no copy to drift and the opt-in travels
+# with the clone. Updating this checkout updates every repo. --init prepares one
+# repo: infra-llm/ (plans and sessions), .infra-llm.env, the ignore entries that
+# keep both out of git and out of any other ignore file the repo already has
+# (appended to, never created), and the instruction block. --agent wires the repo
+# to carry the hooks itself - for a machine with no --global install, or a repo
+# teammates and CI clone and must get the workflow with.
 #
 # The instruction block is per repo on purpose: it travels with the clone, where
 # a machine-wide CLAUDE.md applied to every project whether or not it used the
@@ -119,16 +120,17 @@ LLM_VERSION="2026-07-24.2"
 # plus infra-llm-step/-workflow whose protocol now lives in /infra-llm-plan and
 # the instruction block. Only the domain skills (designer, code) remain, opt-in.
 LLM_SKILLS_OLD="step-plan llm-workflow design-review infra-llm-step infra-llm-workflow"
-# Opt-in domain skills (in llm/skills/), installed per-repo by --designer / --code
-# and machine-wide by --global. Each contributes one line to the "# Skills" block.
+# Opt-in domain skills (in llm/skills/). --global installs them machine-wide with
+# the rest; --designer / --code opt one repo in by adding its line to the
+# "# Skills" block, which is the whole of what a repo carries.
 LLM_DESIGN_SKILL="infra-llm-designer"
 LLM_CODE_SKILL="infra-llm-code"
 # Canonical order the skills block lists them in, whatever order they were added.
 LLM_DOMAIN_SKILLS="$LLM_CODE_SKILL $LLM_DESIGN_SKILL"
 LLM_DOC_START="<!-- infra-llm:start -->"
 LLM_DOC_END="<!-- infra-llm:end -->"
-# The "# Skills" block is separate from the instruction block above: its contents
-# track which domain skills are installed, so --designer / --code and uninstall
+# The "# Skills" block is separate from the instruction block above: it records
+# which domain skills this repo asks for, so --designer / --code and uninstall
 # rewrite it without touching the protocol block.
 LLM_SKILLS_START="<!-- infra-llm:skills:start -->"
 LLM_SKILLS_END="<!-- infra-llm:skills:end -->"
@@ -385,7 +387,7 @@ _llm_doc_installed() {
 
 # One "# Skills" line per opt-in domain skill, so the agent knows when to reach
 # for it. Kept here rather than in the skill body so the "when to use" lives with
-# the block; the skills-block render pulls the line for each installed skill.
+# the block; the skills-block render pulls the line for each skill the repo lists.
 _llm_skill_line() {
   case "$1" in
     "$LLM_DESIGN_SKILL") echo "- Use the \`infra-llm-designer\` skill for any UI or visual work — audit with impeccable, review motion, and check it in the real browser before calling it done." ;;
@@ -394,8 +396,8 @@ _llm_skill_line() {
 }
 
 # The instruction block body is the template alone now. The "# Skills" list is a
-# separate block (LLM_SKILLS_START/END) that tracks installed skills, so it no
-# longer rides inside this content or its up-to-date comparison.
+# separate block (LLM_SKILLS_START/END) that tracks the skills this repo asks
+# for, so it no longer rides inside this content or its up-to-date comparison.
 _llm_block_content() {
   cat "$LLM_TEMPLATE"
 }
@@ -423,30 +425,49 @@ _llm_strip_block() {
   rm -f "$tmp"
 }
 
-# The domain skills a repo lists in its "# Skills" block: those installed in the
-# repo's OWN .claude/skills, in canonical order. Repo-local on purpose, so
-# `--designer` / `--code` add a line and their `--uninstall` removes it -
-# symmetric and predictable. A machine-wide skill still loads in every project;
-# it just isn't auto-listed here (opt a repo in with `infra-llm --designer` /
-# `--code`), which is what keeps a per-repo uninstall able to drop the line.
-_llm_available_domain_skills() {
-  local root="$1" name
+# The skills block as it currently sits in a doc, marker lines excluded.
+_llm_skills_block_body() {
+  [ -f "$1" ] || return 0
+  awk -v s="$LLM_SKILLS_START" -v e="$LLM_SKILLS_END" '
+    index($0, e) { inblk = 0 }
+    inblk        { print }
+    index($0, s) { inblk = 1 }
+  ' "$1"
+}
+
+# Which domain skills a repo has opted into. The skills block IS that record: the
+# SKILL.md files are machine-wide now, so a file on disk says nothing about this
+# repo, while a line in the block is committed, travels to teammates, and is what
+# `--designer` / `--code` add and their `--remove` takes away. Union across every
+# doc carrying the block, in canonical order, so a repo whose docs drifted apart
+# converges instead of losing a skill on the next render.
+_llm_enabled_domain_skills() {
+  local root="$1" doc name listed=""
+  for doc in $(_llm_repo_docs "$root"); do
+    listed="$listed$(_llm_skills_block_body "$root/$doc")"$'\n'
+  done
   for name in $LLM_DOMAIN_SKILLS; do
+    case "$listed" in *'`'"$name"'`'*) printf '%s\n' "$name"; continue ;; esac
+    # An older install opted a repo in by copying the SKILL.md here. Count that
+    # as opted in, so the line is written before the copy is swept away.
     [ -f "$root/.claude/skills/$name/SKILL.md" ] && printf '%s\n' "$name"
   done
 }
 
-# Rewrite the "# Skills" block in one doc file to match the skills available to
-# the repo: strip any existing block, then append a fresh one with a line per
-# available skill. An empty set leaves no block at all - markers and header gone.
-# Only touches a file that already carries the instruction markers, so a stray
-# skills block is never planted in a doc we don't manage.
+# Rewrite the "# Skills" block in one doc file: strip any existing block, then
+# append a fresh one with a line per enabled skill. An empty set leaves no block
+# at all - markers and header gone. Only touches a file that already carries the
+# instruction markers, so a stray skills block is never planted in a doc we don't
+# manage. With two arguments the set is read back from the repo (a reconcile);
+# a third argument names the set explicitly, which is how --designer / --code
+# hand over the set they just changed.
 _llm_skills_block_render() {
-  local root="$1" file="$2" name body=""
+  local root="$1" file="$2" names name body=""
   local path="$root/$file"
+  if [ $# -ge 3 ]; then names="$3"; else names="$(_llm_enabled_domain_skills "$root")"; fi
   { [ -f "$path" ] && grep -qF "$LLM_DOC_START" "$path"; } || return 0
   _llm_strip_block "$path" "$LLM_SKILLS_START" "$LLM_SKILLS_END"
-  for name in $(_llm_available_domain_skills "$root"); do
+  for name in $names; do
     body="${body}$(_llm_skill_line "$name")"$'\n'
   done
   [ -n "$body" ] || return 0
@@ -467,9 +488,9 @@ _llm_doc_block() {
     if [ "$(_llm_doc_installed "$path")" = "$(_llm_block_content | _llm_trim_blanks)" ]; then
       if [ "$force" -eq 0 ]; then
         printf '  current  %s (block up to date)\n' "$file"
-        # The instruction block is current, but the installed skills may have
-        # changed since - reconcile the skills block before returning so a plain
-        # re-run of --init / --docs still tracks them.
+        # The instruction block is current, but the skills the repo lists may
+        # have changed since - reconcile the skills block before returning so a
+        # plain re-run of --init / --docs still tracks them.
         _llm_skills_block_render "$root" "$file"
         return 0
       fi
@@ -511,9 +532,12 @@ _llm_doc_block() {
   esac
 
   # The "# Skills" list is its own block now, sitting after the instruction block
-  # and tracking which domain skills are installed. Render it here so every doc
-  # --init / --agent touches gets it in step, without a separate command.
+  # and tracking which domain skills this repo asks for. Render it here so every
+  # doc --init / --agent touches gets it in step, without a separate command, and
+  # sweep a legacy per-repo skill copy on the way past so an old install migrates
+  # by being re-run.
   _llm_skills_block_render "$root" "$file"
+  _llm_sweep_legacy_repo_skills "$root"
 }
 
 _llm_doc_strip() {
@@ -1146,23 +1170,26 @@ _llm_claude_home_label() {
   esac
 }
 
-# The protocol skills live in the infra checkout and `infra-llm --skill <name>`
-# prints them on demand. Copied under the Claude config dir they load on their
-# own instead - their descriptions are written for exactly that ("use at the
-# START of any task with more than one step"), so an agent that never runs the
-# command still gets the protocol, in every project on this machine.
+# Every skill in the checkout lives under the Claude config dir, installed once
+# per machine. `infra-llm --skill <name>` still prints one on demand, but a copy
+# here loads on its own - so an agent that never runs the command still gets the
+# protocol, in every project on this machine. The domain skills (designer, code)
+# come along: they describe their own trigger, so an installed-but-unused one
+# costs nothing, and a repo opts in by listing it in the instruction block rather
+# than by carrying a generated file. --no-designer is the one opt-out.
 _llm_install_protocol_skills() {
   local home="$1" label="${2:-$1}" want_designer="${3:-1}" src name dest
   _llm_remove_old_skills "$home" "$label"
   for src in "$LLM_SKILLS_DIR"/*/SKILL.md; do
     [ -f "$src" ] || continue
     name="$(basename "$(dirname "$src")")"
-    # The domain skills (designer, code) are opt-in per repo, not part of the
-    # machine-wide sync - each would load in every project even when nothing is
-    # about UI or code quality. Installed with `infra-llm --designer` / `--code`
-    # instead, and always skipped here.
-    { [ "$name" = "$LLM_DESIGN_SKILL" ] || [ "$name" = "$LLM_CODE_SKILL" ]; } && continue
     dest="$home/skills/$name/SKILL.md"
+    # Opted out of the designer skill? Take an earlier install's copy back out on
+    # the way past, so --no-designer means the same on a refresh as on a first run.
+    if [ "$name" = "$LLM_DESIGN_SKILL" ] && [ "$want_designer" -eq 0 ]; then
+      [ -f "$dest" ] && _llm_domain_skill "$name" --remove --at "$home" "$label"
+      continue
+    fi
     if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
       printf '  current  %s/skills/%s/SKILL.md\n' "$label" "$name"
       continue
@@ -1286,8 +1313,6 @@ _llm_global() {
     [ -f "$home/$file" ] && grep -qF "$LLM_DOC_START" "$home/$file" 2>/dev/null && found=1
     [ -f "$home/settings.json" ] && grep -q "infra-llm --hook" "$home/settings.json" 2>/dev/null && found=1
     ls "$home/commands"/infra-llm*.md >/dev/null 2>&1 && found=1
-    [ -f "$home/skills/$LLM_DESIGN_SKILL/SKILL.md" ] && found=1
-    [ -f "$home/skills/$LLM_CODE_SKILL/SKILL.md" ] && found=1
     local s
     for s in "$LLM_SKILLS_DIR"/*/SKILL.md; do
       [ -f "$s" ] || continue
@@ -1305,8 +1330,7 @@ _llm_global() {
     [ -f "$home/$file" ] && [ -z "$(tr -d '[:space:]' < "$home/$file")" ] && rm -f "$home/$file"
     _llm_unmerge_hooks "$home/settings.json" "$label/settings.json"
     _llm_remove_commands "$home" 1 "$label/commands"
-    _llm_designer --remove --at "$home" "$label"
-    _llm_code --remove --at "$home" "$label"
+    # One sweep takes every skill of ours out, domain skills included.
     _llm_remove_protocol_skills "$home" "$label"
     rmdir "$home/skills" 2>/dev/null || true
     # The CLI launcher stays: per-repo wiring and the hooks in other checkouts
@@ -1341,9 +1365,9 @@ _llm_global() {
   # only once instead of in each repo.
   [ "$want_cmds" -eq 1 ] && _llm_install_commands "$home" 1 "$label/commands"
 
-  # The protocol skills come along machine-wide. infra-llm-designer is no longer
-  # among them - it loaded in every project regardless of the task, so it is now
-  # opt-in per repo via `infra-llm --designer`.
+  # Every skill comes along, designer and code included - a repo that wants one
+  # says so in its instruction block (`infra-llm --designer` / `--code`) rather
+  # than carrying a copy of the file.
   [ "$want_skill" -eq 1 ] && _llm_install_protocol_skills "$home" "$label" "$want_designer"
 
   echo "  covers: every project Claude Code opens as $(id -un)"
@@ -1357,6 +1381,7 @@ _llm_global() {
     echo "  hooks:  none (command and skills only)"
   fi
   echo "  docs:   run 'infra-llm --init' in a repo for its instruction block"
+  echo "  skills: all of them, here - opt a repo in with 'infra-llm --designer' / '--code'"
   echo "  note:   Claude Code only - other agents still need a per-repo block"
   echo "  remove: infra-llm --global --remove"
 }
@@ -1381,11 +1406,9 @@ _llm_uninstall() {
   done
   _llm_doc_strip "$root" ".claude/CLAUDE.md"
 
-  # Skills we generated here go too - the design skill, and any protocol skill a
-  # --global-style install left in the repo. Same terms as the global sweep: an
-  # edited copy is the repo's own now and is reported rather than deleted.
-  _llm_designer --remove --at "$root/.claude" ".claude"
-  _llm_code --remove --at "$root/.claude" ".claude"
+  # Any skill file an older or --global-style install left in the repo goes too -
+  # nothing writes one here any more. Same terms as the global sweep: an edited
+  # copy is the repo's own now and is reported rather than deleted.
   _llm_remove_protocol_skills "$root/.claude" ".claude"
   rmdir "$root/.claude/skills" 2>/dev/null || true
 
@@ -1413,23 +1436,52 @@ _llm_repo_docs() {
   esac
 }
 
-# Reconcile the skills block in every doc of a repo against what's installed -
-# what --designer / --code call after they add or drop a skill.
+# Write the same skills block into every doc of a repo - what --designer / --code
+# call after they add or drop a skill, and what keeps two docs from drifting.
 _llm_skills_sync_repo() {
-  local root="$1" doc
+  local root="$1" doc names
   [ -n "$root" ] || return 0
+  # Work out the set once and hand it to every doc: derived per doc, a removal
+  # would read a stale line back out of the doc it hadn't reached yet.
+  if [ $# -ge 2 ]; then names="$2"; else names="$(_llm_enabled_domain_skills "$root")"; fi
   for doc in $(_llm_repo_docs "$root"); do
-    _llm_skills_block_render "$root" "$doc"
+    _llm_skills_block_render "$root" "$doc" "$names"
   done
+  _llm_sweep_legacy_repo_skills "$root"
 }
 
-# infra-llm-designer / infra-llm-code are opt-in domain skills in llm/skills/.
-# These commands put ONE skill into a repo's .claude/skills (or take it back out)
-# without the rest of a machine-wide install - the one thing the install loop
-# can't express.
+# An older install copied the domain SKILL.md into .claude/skills/ to opt a repo
+# in. The skills are machine-wide now and the block carries the opt-in, so that
+# copy is dead weight that shadows the real one - take it out. An edited copy is
+# the repo's own: report it and leave it, same terms as every other sweep. Runs
+# after the block is rendered, so the opt-in is already recorded as a line.
+_llm_sweep_legacy_repo_skills() {
+  local root="$1" name dir file
+  for name in $LLM_DOMAIN_SKILLS; do
+    dir="$root/.claude/skills/$name"
+    file="$dir/SKILL.md"
+    [ -f "$file" ] || continue
+    if ! cmp -s "$LLM_SKILLS_DIR/$name/SKILL.md" "$file"; then
+      _llm_hm "kept     .claude/skills/$name/SKILL.md (edited since we wrote it; the skill is machine-wide now)"
+      continue
+    fi
+    rm -f "$file"
+    rmdir "$dir" 2>/dev/null || true
+    rmdir "$root/.claude/skills" 2>/dev/null || true
+    _llm_ok "removed .claude/skills/$name/ (the skill is machine-wide now)"
+  done
+  return 0
+}
+
+# infra-llm-designer / infra-llm-code are the opt-in domain skills in llm/skills/.
+# The SKILL.md files are machine-wide (`infra-llm --global` installs them all);
+# what these commands change is whether THIS repo asks for one, and that is a
+# single line in the instruction block's "# Skills" section. Nothing is generated
+# in the repo, so there is no copy to drift out of date and the opt-in travels
+# with the doc to teammates.
 #
-# $1 = skill name. --at <dir> [label] = the skills/ parent to write into (used by
-# --global); with no target it works on the current repo.
+# $1 = skill name. --at <dir> [label] installs or removes the file itself under
+# <dir>/skills - that path belongs to --global and never touches a repo doc.
 _llm_domain_skill() {
   local name="$1" root src dir file remove=0 at="" label="" flag uses
   shift
@@ -1444,65 +1496,87 @@ _llm_domain_skill() {
     shift
   done
 
+  # ---- machine-wide: the file itself ----
   if [ -n "$at" ]; then
     dir="$at/skills/$name"
     label="${label:-$at}/skills/$name"
-  else
-    root="$(_llm_target)"
-    dir="$root/.claude/skills/$name"
-    label=".claude/skills/$name"
-  fi
-  file="$dir/SKILL.md"
+    file="$dir/SKILL.md"
 
-  if [ "$remove" -eq 1 ]; then
-    if [ ! -e "$file" ] && [ ! -d "$dir" ]; then
-      _llm_hm "no $name skill in $label - nothing to remove"
-      # The skill file may already be gone while a stale line lingers in the
-      # block, so reconcile the docs before returning rather than leaving it.
-      [ -z "$at" ] && _llm_skills_sync_repo "$root"
+    if [ "$remove" -eq 1 ]; then
+      if [ ! -e "$file" ] && [ ! -d "$dir" ]; then
+        _llm_hm "no $name skill in $label - nothing to remove"
+        return 0
+      fi
+      # An edited copy is the user's now - deleting it to "clean up" is worse
+      # than leaving a file behind, so say so and move on.
+      if [ -f "$file" ] && ! cmp -s "$src" "$file"; then
+        _llm_hm "kept     $label/SKILL.md (edited since we wrote it)"
+        return 0
+      fi
+      rm -f "$file"
+      # Drop the skill directory too, but only if it's now empty (never clobber
+      # anything the user added alongside it).
+      rmdir "$dir" 2>/dev/null || true
+      _llm_ok "removed $label/"
       return 0
     fi
-    # --global sweeps this up on the way past, so an edited copy is left where it
-    # is - the user either wrote it or changed it. A direct "$flag --remove"
-    # asked for this file by name, so it goes either way.
-    if [ -n "$at" ] && [ -f "$file" ] && ! cmp -s "$src" "$file"; then
-      _llm_hm "kept     $label/SKILL.md (edited since we wrote it)"
-      return 0
+
+    [ -f "$src" ] || { _llm_no "missing skill source: $src"; return 1; }
+    if [ -f "$file" ] && cmp -s "$src" "$file"; then
+      printf '  current  %s/SKILL.md\n' "$label"
+    else
+      mkdir -p "$dir"
+      cp "$src" "$file" || { _llm_no "could not write $label/SKILL.md"; return 1; }
+      _llm_ok "skill    $label/SKILL.md"
     fi
-    rm -f "$file"
-    # Drop the skill directory too, but only if it's now empty (never clobber
-    # anything the user added alongside it).
-    rmdir "$dir" 2>/dev/null || true
-    _llm_ok "removed $label/"
-    # Per-repo: the skill is gone, so its line leaves the docs (and the block with
-    # it if it was the last one). --at leaves docs to --global/--init.
-    [ -z "$at" ] && _llm_skills_sync_repo "$root"
     return 0
   fi
 
-  [ -f "$src" ] || { _llm_no "missing skill source: $src"; return 1; }
-  if [ -f "$file" ] && cmp -s "$src" "$file"; then
-    printf '  current  %s/SKILL.md\n' "$label"
+  # ---- this repo: one line in the block ----
+  local listed keep want="" n was=0 home
+  root="$(_llm_target)"
+  if [ -z "$(_llm_repo_docs "$root")" ]; then
+    _llm_no "no instruction block in this repo - run: infra-llm --init"
+    return 1
+  fi
+  listed=" $(_llm_enabled_domain_skills "$root" | tr '\n' ' ') "
+  case "$listed" in *" $name "*) was=1 ;; esac
+
+  # Rebuild the wanted set from the canonical order rather than editing a list,
+  # so the block always comes out in the same order however it got there.
+  for n in $LLM_DOMAIN_SKILLS; do
+    case "$listed" in *" $n "*) keep=1 ;; *) keep=0 ;; esac
+    if [ "$n" = "$name" ]; then
+      if [ "$remove" -eq 1 ]; then keep=0; else keep=1; fi
+    fi
+    [ "$keep" -eq 1 ] && want="$want $n"
+  done
+  _llm_skills_sync_repo "$root" "$want"
+
+  if [ "$remove" -eq 1 ]; then
+    if [ "$was" -eq 0 ]; then _llm_hm "$name was not listed here - nothing to remove"
+    else _llm_ok "removed $name from the # Skills block"; fi
+    echo "  note:   the skill itself stays machine-wide - 'infra-llm --global --remove' drops it"
+    return 0
+  fi
+
+  if [ "$was" -eq 1 ]; then printf '  current  %s already listed in the # Skills block\n' "$name"
+  else _llm_ok "listed   $name in the # Skills block"; fi
+
+  # The line is worth nothing without the skill behind it: say where it lives,
+  # and if it isn't installed yet, say what installs it.
+  home="$(_llm_claude_home)"
+  if [ -f "$home/skills/$name/SKILL.md" ]; then
+    echo "  skill:  $(_llm_claude_home_label)/skills/$name/SKILL.md"
   else
-    mkdir -p "$dir"
-    cp "$src" "$file" || { _llm_no "could not write $label/SKILL.md"; return 1; }
-    _llm_ok "skill    $label/SKILL.md"
+    _llm_hm "$name is not installed on this machine yet - run: infra-llm --global"
   fi
-
-  # Per-repo: add this skill's line to the docs that carry our block (render also
-  # fixes a doc that had the skill but not the line yet). --at defers to --init.
-  [ -z "$at" ] && _llm_skills_sync_repo "$root"
-
-  # Run on its own rather than as part of --global? Then this output is all the
-  # user gets, so say what the skill pulls in and how to undo it.
-  if [ -z "$at" ]; then
-    case "$name" in
-      "$LLM_DESIGN_SKILL") uses="impeccable · emilkowalski/skills · chrome-devtools MCP" ;;
-      "$LLM_CODE_SKILL")   uses="clean-code, security & performance review · chrome-devtools MCP" ;;
-    esac
-    [ -n "$uses" ] && echo "  uses:   $uses"
-    echo "  remove: infra-llm $flag --remove"
-  fi
+  case "$name" in
+    "$LLM_DESIGN_SKILL") uses="impeccable · emilkowalski/skills · chrome-devtools MCP" ;;
+    "$LLM_CODE_SKILL")   uses="clean-code, security & performance review · chrome-devtools MCP" ;;
+  esac
+  [ -n "$uses" ] && echo "  uses:   $uses"
+  echo "  remove: infra-llm $flag --remove"
   return 0
 }
 
