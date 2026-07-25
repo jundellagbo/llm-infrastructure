@@ -1,0 +1,20 @@
+# These scripts are executed by bash on Linux, macOS and inside WSL. A CRLF
+# checkout (Windows clients, or core.autocrlf=true) breaks them hard: the shebang
+# line becomes "#!/usr/bin/env bash\r" and the kernel reports "no such file".
+# Normalise to LF in the working tree everywhere, on every platform.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.env  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.conf text eol=lf
+
+# Never touched by line-ending conversion
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.ico  binary
+*.crt  binary
+*.key  binary
