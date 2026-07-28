@@ -7,7 +7,7 @@ description: Prepare a release - gather tags/commits via git, pick the version, 
 
 Read the real state yourself first (read-only git is fine):
 - `git tag --sort=-v:refname | head` for existing tags; the top one is the previous release;
-- `git log --oneline <last-tag>..HEAD` and `git diff --stat <last-tag>..HEAD` for what changed since it;
+- `git log --oneline <last-tag>..HEAD | head -40` and `git diff --shortstat <last-tag>..HEAD` for what changed since it — the commits carry the notes, so reach for the full log or a per-file `--stat` only when 40 subjects don't cover the release;
 - if a requested version already tags something, STOP — never duplicate or move a tag.
 
 Pick a version if none was given and bump it everywhere the project declares it:

@@ -12,7 +12,10 @@ Read the real state yourself first (read-only git is fine):
 
 If HEAD is on the base branch, the work needs its own branch first. Read the
 actual diff (it says what changed, not what was asked) and confirm it's coherent.
-Run `infra-llm verify` and confirm it passes — flag a red tree, don't hide it.
+Under ~30 changed files read it whole; above that a full diff crowds out the rest
+of the session, so work from `--stat` and read only the files the summary and
+risks actually turn on. Run `infra-llm verify` and confirm it passes — flag a red
+tree, don't hide it.
 
 Git is the user's decision, so DON'T commit, push, branch or open the PR
 yourself. Prepare everything, then hand over the exact commands to run
