@@ -55,10 +55,23 @@ Code): `verify`, `steps`, `step-done`, `status`, `sessions`, `worktrees`,
 `--code`. Per-repo tuning is one git-ignored `.infra-llm.env` (`VERIFY_CMD`,
 `GIT_GUARD`); `infra-llm --doctor` checks the machine can run it all.
 
+## Platforms (`platforms/`)
+
+Five environments, one file each: `linux`, `wsl`, `macos`, `windows` (MSYS2 /
+Cygwin) and `gitbash` (Git for Windows). `detect.sh` picks one from `uname` and
+loads it; everything a script needs to know about the machine is a `platform_*`
+call, so neither `llm.sh` nor `install.sh` branches on an OS name. The common
+answers are the defaults in `detect.sh` and each file overrides only what it
+really does differently — `gitbash.sh` is `windows.sh` plus a name and a curl
+hint. Adding an environment is one file and a line in `platform_detect`.
+
+`infra-llm --doctor` names the file that answered; `PLATFORM_FORCE=<id>` loads a
+different one, which is how the layer is tested from any machine.
+
 ## Installer (`install.sh`)
 
-Installs into your home directory — **no root**, on Linux, WSL, macOS and Git
-Bash on Windows. Run it as yourself; with `sudo` it targets the invoking user.
+Installs into your home directory — **no root**, on any of the five. Run it as
+yourself; with `sudo` it targets the invoking user.
 
 On Windows the CLI is a `.exe`, so the installer drives `install.ps1` through
 PowerShell (`claude.ai/install.sh` refuses to run under MSYS) and registers

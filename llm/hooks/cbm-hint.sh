@@ -15,14 +15,15 @@ set -uo pipefail
 
 # Useless without the server the advice points at - stay silent otherwise. The
 # binary may be installed without being on this shell's PATH, so check the
-# install directory too - under a Windows bash it is USERPROFILE's, not
-# necessarily HOME's, and the file carries a .exe suffix.
+# install directory too. Which home that is and whether the file carries a
+# suffix are platform questions, so platforms/ answers them; $HOME is checked as
+# well because the two can differ under a Windows bash.
 if ! command -v codebase-memory-mcp >/dev/null 2>&1; then
+  . "$(dirname "$0")/../../platforms/detect.sh"
   found=""
-  for cbm in "$HOME/.local/bin/codebase-memory-mcp" \
-             "$HOME/.local/bin/codebase-memory-mcp.exe" \
-             "${USERPROFILE:+$(cygpath -u "$USERPROFILE" 2>/dev/null)/.local/bin/codebase-memory-mcp.exe}"; do
-    [ -n "$cbm" ] && [ -x "$cbm" ] && { found=1; break; }
+  for cbm in "$(platform_home)/.local/bin/codebase-memory-mcp$(platform_exe_suffix)" \
+             "$HOME/.local/bin/codebase-memory-mcp$(platform_exe_suffix)"; do
+    [ -x "$cbm" ] && { found=1; break; }
   done
   [ -n "$found" ] || exit 0
 fi

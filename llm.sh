@@ -8,6 +8,12 @@
 # gets only hook wiring that calls the "infra-llm" command, plus an instruction
 # block in its own CLAUDE.md / AGENTS.md / GEMINI.md.
 #
+# Everything that differs per environment - the home Claude Code reads, how to
+# reach PATH, path translation for a native Windows program - lives in
+# platforms/ (linux, wsl, macos, windows, gitbash) behind a fixed set of
+# platform_* questions, so nothing here branches on an OS name. Adding an
+# environment is one file there and a line in platform_detect.
+#
 #   infra-llm --global          # wire every repo on this machine, once
 #   infra-llm --init            # this repo: state dirs, ignores, instructions
 #   infra-llm --agent           # wire THIS repo instead (hooks + all agents)
@@ -87,29 +93,28 @@ LLM_HOOKS_DIR="${LLM_INFRA_DIR}/llm/hooks"
 LLM_SKILLS_DIR="${LLM_INFRA_DIR}/llm/skills"
 LLM_TEMPLATE="${LLM_INFRA_DIR}/llm/templates/instructions.md"
 
-# Which of the four supported environments this is - Linux, WSL, macOS, or a
-# bash on Windows (Git Bash / MSYS2 / Cygwin). Resolved once at load because two
-# things below depend on it: where Claude Code keeps its config, and whether a
-# path has to be translated before a native Windows program can read it.
-case "$(uname -s 2>/dev/null)" in
-  Darwin)               LLM_OS="macos" ;;
-  Linux)                LLM_OS="linux"
-                        if grep -qi microsoft /proc/version 2>/dev/null; then LLM_OS="wsl"; fi ;;
-  CYGWIN*|MINGW*|MSYS*) LLM_OS="windows" ;;
-  *)                    LLM_OS="linux" ;;
-esac
-
-# The home directory Claude Code itself uses. Everywhere but Windows that is
-# plainly $HOME. On Windows Claude Code is a native .exe reading %USERPROFILE%,
-# which is usually what Git Bash set HOME to but not always - a roaming profile,
-# HOMEDRIVE/HOMEPATH or a custom HOME in /etc/profile all move it, and when they
-# differ ~/.claude is a directory Claude Code never opens.
-LLM_HOME="$HOME"
-if [ "$LLM_OS" = windows ] && [ -n "$USERPROFILE" ] && command -v cygpath >/dev/null 2>&1; then
-  _llm_up="$(cygpath -u "$USERPROFILE" 2>/dev/null)"
-  [ -d "$_llm_up" ] && LLM_HOME="$_llm_up"
-  unset _llm_up
+# Which environment this is, and what it does differently, comes from platforms/
+# - one file per environment behind a fixed set of platform_* questions. Loaded
+# once at load time because two things below depend on it: where Claude Code
+# keeps its config, and whether a path has to be translated before a native
+# Windows program can read it.
+#
+# Sourced defensively: a checkout missing platforms/ still gives a working shell
+# that can say what is wrong. _llm_assets_ok and --doctor report it.
+LLM_PLATFORMS_DIR="${LLM_INFRA_DIR}/platforms"
+if [ -f "$LLM_PLATFORMS_DIR/detect.sh" ]; then
+  . "$LLM_PLATFORMS_DIR/detect.sh"
+else
+  PLATFORM_ID="unknown"
+  platform_label()       { printf 'unknown (platforms/ is missing)\n'; }
+  platform_home()        { printf '%s\n' "$HOME"; }
+  platform_path_advice() { printf "           echo 'export PATH=\"%s:\$PATH\"' >> ~/.bashrc\n" "$1"; }
 fi
+
+# The home directory Claude Code itself uses - $HOME everywhere but Windows,
+# where Claude Code is a native .exe reading %USERPROFILE%. platforms/ owns that
+# difference; see windows.sh for why the two can disagree.
+LLM_HOME="$(platform_home)"
 
 # Where the infra-llm launcher is installed so hooks can find it on PATH
 LLM_BIN_DIR="${LLM_BIN_DIR:-$LLM_HOME/.local/bin}"
@@ -205,6 +210,13 @@ _llm_assets_ok() {
     _llm_no "workflow assets not found at ${LLM_INFRA_DIR}/llm - is LLM_INFRA_DIR right?"
     return 1
   fi
+  # Without platforms/ every environment answer falls back to the Linux default,
+  # which on Windows is wrong in ways that surface much later (the wrong home,
+  # PATH advice that does nothing). Say so here instead.
+  if [ ! -f "$LLM_PLATFORMS_DIR/detect.sh" ]; then
+    _llm_no "platform files not found at $LLM_PLATFORMS_DIR - is LLM_INFRA_DIR right?"
+    return 1
+  fi
 }
 
 # ------------------------------------------------------------- hook execution
@@ -264,27 +276,10 @@ _llm_install_cli() {
 }
 
 # How to put LLM_BIN_DIR on PATH for the shell the HOOKS run in, which is not
-# necessarily this one. Claude Code runs a hook through a non-interactive shell
-# that reads no rc file, so what it gets is whatever PATH the Claude Code process
-# was started with. Editing an rc is enough on Linux/macOS/WSL, where Claude Code
-# is launched from a terminal that has already read it. On Windows it is not:
-# Claude Code is a native .exe usually started from outside any bash, so the
-# directory has to be on the WINDOWS user PATH before the Git Bash it spawns for
-# hooks can see it.
+# necessarily this one - what that takes differs per environment, so platforms/
+# answers it.
 _llm_path_advice() {
-  if [ "$LLM_OS" = windows ]; then
-    local win="$LLM_BIN_DIR"
-    command -v cygpath >/dev/null 2>&1 && win="$(cygpath -w "$LLM_BIN_DIR" 2>/dev/null || printf '%s' "$LLM_BIN_DIR")"
-    # Not `setx PATH "%PATH%;..."`: %PATH% is the merged system+user value, so
-    # that copies the system PATH into the user one and silently truncates the
-    # result at 1024 characters. Append to the user variable only.
-    printf '           add it to the Windows user PATH (PowerShell, once):\n'
-    printf '             [Environment]::SetEnvironmentVariable("Path",\n'
-    printf '               [Environment]::GetEnvironmentVariable("Path","User") + ";%s", "User")\n' "$win"
-    printf '           then restart Claude Code - hooks inherit its PATH, not your rc file\n'
-  else
-    printf '           echo '\''export PATH="%s:$PATH"'\'' >> ~/.bashrc\n' "$LLM_BIN_DIR"
-  fi
+  platform_path_advice "$LLM_BIN_DIR"
 }
 
 # ------------------------------------------------------------------ detection
@@ -1716,18 +1711,19 @@ _llm_worktrees() {
 # hooks shell out to, then runs each hook for real - a syntax check proves
 # nothing about a BSD userland or a CRLF checkout.
 _llm_doctor() {
-  local fails=0 warns=0 os tmp t path out
-
-  case "$LLM_OS" in
-    linux)   os="Linux" ;;
-    wsl)     os="WSL (Linux on Windows)" ;;
-    macos)   os="macOS" ;;
-    windows) os="Windows (git-bash/msys)" ;;
-    *)       os="unknown" ;;
-  esac
+  local fails=0 warns=0 tmp t path out
 
   echo "environment"
-  printf '  os:       %s\n' "$os"
+  printf '  os:       %s\n' "$(platform_label)"
+  # Which platform file answered - the first thing to check when a machine
+  # behaves like the wrong OS, and the one file to open to fix it.
+  if [ -f "$LLM_PLATFORMS_DIR/$PLATFORM_ID.sh" ]; then
+    printf '  platform: platforms/%s.sh%s\n' "$PLATFORM_ID" \
+      "$([ -n "$PLATFORM_FORCE" ] && printf ' (forced by PLATFORM_FORCE)')"
+  else
+    _llm_no "no platform file for '$PLATFORM_ID' - every answer fell back to the Linux default"
+    fails=$((fails + 1))
+  fi
   printf '  home:     %s%s\n' "$LLM_HOME" \
     "$([ "$LLM_HOME" != "$HOME" ] && printf ' (%%USERPROFILE%%, not $HOME)')"
   printf '  version:  %s\n' "$LLM_VERSION"
@@ -1952,7 +1948,7 @@ _llm_doctor() {
   if [ "$warns" -gt 0 ]; then
     _llm_hm "$warns optional thing(s) missing - everything essential works"
   else
-    _llm_ok "all good - Linux, macOS and WSL are all supported"
+    _llm_ok "all good - every environment in platforms/ is supported"
   fi
   return 0
 }

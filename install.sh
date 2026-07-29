@@ -18,8 +18,9 @@
 #   ./install.sh --uninstall --claude # uninstall only the CLI
 #   ./install.sh --uninstall          # uninstall everything managed here
 #
-# Runs on Linux, WSL, macOS and Git Bash / MSYS2 on Windows. Everything installs
-# into a home directory, so no root is needed on any of them - run it as
+# Runs on Linux, WSL, macOS, Git Bash and MSYS2/Cygwin on Windows - one file per
+# environment in platforms/, which is also where a new one is added. Everything
+# installs into a home directory, so no root is needed on any of them - run it as
 # yourself. Run it with sudo and it targets the user who invoked sudo, not root;
 # on Windows there is no sudo and none is wanted.
 #
@@ -41,20 +42,18 @@ print_warning() { echo -e "${YELLOW}! $1${NC}"; }
 
 # ------------------------------------------------------------------- platform
 #
-# Four environments, and the differences between them decide what this script
-# can run: the CLI ships as a .exe on Windows and a shell installer everywhere
-# else, a native Windows program cannot read an MSYS path or spawn an npx shim,
-# and Chrome keeps its profile somewhere different on each. Everything below
-# branches on this one value.
-case "$(uname -s 2>/dev/null)" in
-    Darwin) PLATFORM=macos ;;
-    Linux)  PLATFORM=linux
-            # A bare "&& PLATFORM=wsl" would end the case on plain Linux and,
-            # under set -e, take the whole script with it.
-            if grep -qi microsoft /proc/version 2>/dev/null; then PLATFORM=wsl; fi ;;
-    MINGW*|MSYS*|CYGWIN*) PLATFORM=windows ;;   # Git Bash / MSYS2
-    *)      PLATFORM=linux ;;
-esac
+# The differences between environments decide what this script can run: the CLI
+# ships as a .exe on Windows and a shell installer everywhere else, a native
+# Windows program cannot read an MSYS path or spawn an npx shim, and Chrome keeps
+# its profile somewhere different on each. All of that lives in platforms/ - one
+# file per environment behind a fixed set of platform_* questions - so nothing
+# below branches on an OS name.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/platforms/detect.sh" ]; then
+    print_error "platforms/detect.sh not found next to install.sh - incomplete checkout?"
+    exit 1
+fi
+. "$SCRIPT_DIR/platforms/detect.sh"
 
 INSTALL_CLAUDE=1
 INSTALL_MCP=1
@@ -137,22 +136,12 @@ else
     RUN_PREFIX="self"
 fi
 
-# getent is glibc-only (Linux/WSL). macOS has no getent, and under sudo $HOME
-# is root's home, so a bare `${TOOL_HOME:-$HOME}` fallback would silently target
-# /var/root. Resolve the user's real home explicitly: getent where it exists,
-# tilde expansion (bash reads the passwd db) everywhere else.
-TOOL_HOME=""
-if [ "$PLATFORM" = windows ] && [ -n "$USERPROFILE" ] && command -v cygpath >/dev/null 2>&1; then
-    # The Windows CLI is a native .exe: it installs into %USERPROFILE%\.local\bin
-    # and reads %USERPROFILE%\.claude no matter what Git Bash set HOME to (a
-    # roaming profile, HOMEDRIVE/HOMEPATH and /etc/nsswitch.conf all move it).
-    # Resolve the home Claude Code actually uses, so every path below agrees.
-    TOOL_HOME="$(cygpath -u "$USERPROFILE" 2>/dev/null)"
-elif command -v getent >/dev/null 2>&1; then
-    TOOL_HOME="$(getent passwd "$TOOL_USER" | cut -d: -f6)"
-else
-    TOOL_HOME="$(eval echo "~$TOOL_USER")"
-fi
+# Under sudo $HOME is root's home, so a bare `${TOOL_HOME:-$HOME}` fallback would
+# silently target /var/root. Resolve the user's real home explicitly - how that
+# is done differs per environment (getent is glibc-only, and on Windows the home
+# Claude Code reads is %USERPROFILE% whatever this shell set HOME to), so
+# platforms/ answers it.
+TOOL_HOME="$(platform_user_home "$TOOL_USER")"
 # Only accept the fallback to $HOME when it wasn't resolved AND we aren't root -
 # as root, $HOME is not the tool user's home.
 if [ -z "$TOOL_HOME" ] || [ ! -d "$TOOL_HOME" ]; then
@@ -266,55 +255,19 @@ fi
 NEEDS_FETCH=0
 if [ $INSTALL_MCP -eq 1 ]; then
     NEEDS_FETCH=1
-elif [ $INSTALL_CLAUDE -eq 1 ] && [ "$PLATFORM" != windows ]; then
+elif [ $INSTALL_CLAUDE -eq 1 ] && ! platform_native_cli; then
     NEEDS_FETCH=1
 fi
 if [ $NEEDS_FETCH -eq 1 ] && [ -z "$FETCH" ]; then
     print_error "neither curl nor wget is available for ${TOOL_USER}"
     echo "    Install one and re-run:"
-    echo "      Debian/Ubuntu/WSL : sudo apt-get install -y curl"
-    echo "      Fedora/RHEL       : sudo dnf install -y curl"
-    echo "      macOS             : curl ships with macOS; check your PATH"
-    echo "      Git Bash          : curl ships with Git for Windows; check your PATH"
+    echo "      $(platform_curl_hint)"
     echo "    No root on this machine? Nothing here needs one except installing a"
     echo "    downloader - ask an admin, or drop a static curl in ~/.local/bin."
     exit 1
 fi
 
 # ------------------------------------------------------------------ claude cli
-
-# claude.ai/install.sh refuses to run under MINGW/MSYS/CYGWIN - on Windows the
-# CLI is a .exe published through the PowerShell installer, and that .exe is what
-# Git Bash then runs. So drive PowerShell from here rather than piping a script
-# that answers "Windows is not supported" and leaves the user with the three
-# useless warnings that follow (no CLI, no MCPs, no plugins). It installs into
-# %USERPROFILE%\.local\bin and needs no Administrator rights.
-install_claude_windows() {
-    local ps=""
-    if command -v powershell.exe >/dev/null 2>&1; then
-        ps="powershell.exe"
-    elif command -v pwsh.exe >/dev/null 2>&1; then
-        ps="pwsh.exe"
-    elif [ -x "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]; then
-        ps="/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-    fi
-
-    if [ -n "$ps" ] && "$ps" -NoProfile -ExecutionPolicy Bypass \
-         -Command "irm https://claude.ai/install.ps1 | iex" >/dev/null 2>&1; then
-        print_success "Claude CLI installed for ${TOOL_USER}"
-        return 0
-    fi
-
-    if [ -z "$ps" ]; then
-        print_warning "PowerShell not found - cannot install the Windows Claude CLI"
-    else
-        print_warning "Claude CLI install failed for ${TOOL_USER}"
-    fi
-    echo "    Install it yourself, from a PowerShell window:"
-    echo "      irm https://claude.ai/install.ps1 | iex"
-    echo "    then re-run this script - the MCP and plugin steps need the CLI."
-    return 0
-}
 
 if [ $INSTALL_CLAUDE -eq 1 ]; then
     print_info "Installing the Claude Code CLI..."
@@ -326,12 +279,17 @@ if [ $INSTALL_CLAUDE -eq 1 ]; then
     # in place, and "already present" is not what was asked for.
     if [ $FORCE_REINSTALL -eq 0 ] && run_as_user 'command -v claude >/dev/null 2>&1'; then
         print_info "Claude CLI already present for ${TOOL_USER}"
-    elif [ "$PLATFORM" = windows ]; then
-        install_claude_windows
     else
-        run_as_user "$FETCH https://claude.ai/install.sh | bash >/dev/null 2>&1" \
-            && print_success "Claude CLI installed for ${TOOL_USER}" \
-            || print_warning "Claude CLI install failed for ${TOOL_USER}"
+        # Some environments publish the CLI their own way (Windows ships a .exe
+        # through PowerShell, and claude.ai/install.sh refuses to run there at
+        # all). Ask the platform first; it prints its own result. A 1 back means
+        # "not handled here", which is the generic shell installer below.
+        platform_install_claude "$TOOL_USER" && cli_done=0 || cli_done=$?
+        if [ "$cli_done" -eq 1 ]; then
+            run_as_user "$FETCH https://claude.ai/install.sh | bash >/dev/null 2>&1" \
+                && print_success "Claude CLI installed for ${TOOL_USER}" \
+                || print_warning "Claude CLI install failed for ${TOOL_USER}"
+        fi
     fi
 fi
 
@@ -359,16 +317,13 @@ if [ $INSTALL_MCP -eq 1 ]; then
                 fi
                 run_as_user "claude mcp remove -s user '$name' >/dev/null 2>&1" || true
             fi
-            # Git Bash rewrites any argument that looks like a POSIX path before
-            # handing it to a native Windows program, and "/c" looks exactly like
+            # Some shells rewrite any argument that looks like a POSIX path
+            # before handing it to a native program, and "/c" looks exactly like
             # the root of the C: drive - left alone, the wrapper below reaches
-            # the CLI as `cmd C:\ npx ...`. These two switch that translation off
-            # (the first is Git for Windows, the second MSYS2); nothing else
-            # passed here needs converting.
-            local no_conv=""
-            if [ "$PLATFORM" = windows ]; then
-                no_conv="MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "
-            fi
+            # the CLI as `cmd C:\ npx ...`. The platform supplies whatever env
+            # switches that off, and nothing where it doesn't happen.
+            local no_conv
+            no_conv="$(platform_arg_conv_prefix)"
             if run_as_user "${no_conv}claude mcp add ${args} >/dev/null 2>&1"; then
                 print_success "MCP ${name} registered"
             else
@@ -376,20 +331,16 @@ if [ $INSTALL_MCP -eq 1 ]; then
             fi
         }
 
-        # On Windows the CLI is a native process spawning the server directly,
-        # and npx there is a .cmd shim rather than an executable - it can only be
-        # started through cmd.exe. Everywhere else npx is a real program and a
-        # wrapper would just add a process.
-        npx_cmd="npx"
+        # How the CLI has to invoke npx - a real program most places, a .cmd shim
+        # needing cmd.exe where the CLI is native. The platform knows which.
+        npx_cmd="$(platform_npx_cmd)"
         # What an up-to-date registration must contain, as `claude mcp get`
-        # prints it. On Windows that includes the wrapper, so a registration made
-        # before it existed - a bare `Command: npx`, which the CLI there cannot
-        # spawn at all - is replaced rather than accepted as good enough.
+        # prints it. Where npx is wrapped, that wrapper is part of it, so a
+        # registration made before the wrapper existed - a bare `Command: npx`,
+        # which a native CLI cannot spawn at all - is replaced rather than
+        # accepted as good enough.
         cdt_want="--autoConnect"
-        if [ "$PLATFORM" = windows ]; then
-            npx_cmd="cmd /c npx"
-            cdt_want="/c npx chrome-devtools-mcp@latest --autoConnect"
-        fi
+        [ "$npx_cmd" = npx ] || cdt_want="${npx_cmd#* } chrome-devtools-mcp@latest --autoConnect"
 
         claude_mcp_add figma "-s user --transport http figma https://mcp.figma.com/mcp"
         # --autoConnect attaches to the Chrome the user already has open (needs
@@ -410,10 +361,7 @@ if [ $INSTALL_MCP -eq 1 ]; then
         # entries, instructions, skills and lifecycle hooks into every agent it
         # can find. Take the binary, register the server here, and leave the
         # rest of the agent config alone.
-        cbm_bin="${TOOL_HOME}/.local/bin/codebase-memory-mcp"
-        if [ "$PLATFORM" = windows ]; then
-            cbm_bin="${cbm_bin}.exe"
-        fi
+        cbm_bin="${TOOL_HOME}/.local/bin/codebase-memory-mcp$(platform_exe_suffix)"
         if [ -x "$cbm_bin" ] && [ $FORCE_REINSTALL -eq 0 ]; then
             print_info "codebase-memory-mcp binary already present"
         else
@@ -423,13 +371,10 @@ if [ $INSTALL_MCP -eq 1 ]; then
                 || print_warning "codebase-memory-mcp install failed - see https://github.com/DeusData/codebase-memory-mcp"
         fi
         if [ -x "$cbm_bin" ]; then
-            # The registration is read back by the CLI, which on Windows is a
-            # native program: an MSYS path like /c/Users/... is not something it
-            # can execute, so hand it the Windows form of the same file.
-            cbm_arg="$cbm_bin"
-            if [ "$PLATFORM" = windows ] && command -v cygpath >/dev/null 2>&1; then
-                cbm_arg="$(cygpath -w "$cbm_bin" 2>/dev/null || printf '%s' "$cbm_bin")"
-            fi
+            # The registration is read back by the CLI, which where it is native
+            # cannot execute an MSYS path like /c/Users/... - hand it the form it
+            # can read. Off Windows this is the same path back.
+            cbm_arg="$(platform_win_path "$cbm_bin")"
             # The path is the thing that must be right, so it is also what the
             # registration is checked against: one pointing somewhere else (a
             # moved home, or the MSYS path a pre-Windows-support run wrote, which
@@ -554,30 +499,9 @@ if [ $INSTALL_MCP -eq 1 ] && run_as_user 'command -v claude >/dev/null 2>&1'; th
     chrome_dbg_state="none"
     chrome_dbg_where=""
     chrome_dbg_win=0
-    # Where the profile lives is per platform: ~/.config on Linux and WSL,
-    # ~/Library/Application Support on macOS, %LOCALAPPDATA% on Windows. A WSL
-    # box gets the Windows list too, through /mnt/c - the browser a WSL user
-    # actually looks at is nearly always the Windows one.
-    chrome_profile_dirs() {
-        printf '%s\n' \
-            "${TOOL_HOME}/.config/google-chrome" \
-            "${TOOL_HOME}/.config/google-chrome-beta" \
-            "${TOOL_HOME}/.config/google-chrome-unstable" \
-            "${TOOL_HOME}/.config/chromium" \
-            "${TOOL_HOME}/Library/Application Support/Google/Chrome" \
-            "${TOOL_HOME}/Library/Application Support/Google/Chrome Beta" \
-            "${TOOL_HOME}/Library/Application Support/Chromium"
-        case "$PLATFORM" in
-            windows)
-                printf '%s\n' \
-                    "${TOOL_HOME}/AppData/Local/Google/Chrome/User Data" \
-                    "${TOOL_HOME}/AppData/Local/Google/Chrome Beta/User Data" \
-                    "${TOOL_HOME}/AppData/Local/Chromium/User Data" ;;
-            wsl)
-                ls -d /mnt/c/Users/*/AppData/Local/Google/Chrome/"User Data" 2>/dev/null || true ;;
-        esac
-    }
-
+    # Where the profile lives is per platform, so platforms/ has the list - and
+    # on WSL that includes the Windows profiles through /mnt/c, because the
+    # browser a WSL user actually looks at is nearly always the Windows one.
     while IFS= read -r dir; do
         [ -n "$dir" ] || continue
         port_file="${dir}/DevToolsActivePort"
@@ -594,7 +518,7 @@ if [ $INSTALL_MCP -eq 1 ] && run_as_user 'command -v claude >/dev/null 2>&1'; th
         chrome_dbg_state="stale"
         case "$dir" in /mnt/*) chrome_dbg_win=1 ;; *) chrome_dbg_win=0 ;; esac
     done <<EOF
-$(chrome_profile_dirs)
+$(platform_chrome_profiles "$TOOL_HOME")
 EOF
 
     if [ "$chrome_dbg_state" = "live" ]; then
