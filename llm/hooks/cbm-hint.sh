@@ -13,10 +13,18 @@
 # silent. To avoid repeating on every search it fires once per session.
 set -uo pipefail
 
-# Useless without the server the advice points at - stay silent otherwise.
-if ! command -v codebase-memory-mcp >/dev/null 2>&1 \
-   && [ ! -x "$HOME/.local/bin/codebase-memory-mcp" ]; then
-  exit 0
+# Useless without the server the advice points at - stay silent otherwise. The
+# binary may be installed without being on this shell's PATH, so check the
+# install directory too - under a Windows bash it is USERPROFILE's, not
+# necessarily HOME's, and the file carries a .exe suffix.
+if ! command -v codebase-memory-mcp >/dev/null 2>&1; then
+  found=""
+  for cbm in "$HOME/.local/bin/codebase-memory-mcp" \
+             "$HOME/.local/bin/codebase-memory-mcp.exe" \
+             "${USERPROFILE:+$(cygpath -u "$USERPROFILE" 2>/dev/null)/.local/bin/codebase-memory-mcp.exe}"; do
+    [ -n "$cbm" ] && [ -x "$cbm" ] && { found=1; break; }
+  done
+  [ -n "$found" ] || exit 0
 fi
 
 input="$(cat 2>/dev/null)"

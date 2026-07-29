@@ -57,8 +57,17 @@ Code): `verify`, `steps`, `step-done`, `status`, `sessions`, `worktrees`,
 
 ## Installer (`install.sh`)
 
-Installs into your home directory — **no root**. Run it as yourself; with `sudo`
-it targets the invoking user.
+Installs into your home directory — **no root**, on Linux, WSL, macOS and Git
+Bash on Windows. Run it as yourself; with `sudo` it targets the invoking user.
+
+On Windows the CLI is a `.exe`, so the installer drives `install.ps1` through
+PowerShell (`claude.ai/install.sh` refuses to run under MSYS) and registers
+`npx`-based MCP servers through `cmd /c`, which is the only way a native Windows
+process can start an `npx` shim. Paths follow `%USERPROFILE%`, not Git Bash's
+`$HOME`, because that is the home Claude Code itself reads. For hooks to find
+`infra-llm`, `%USERPROFILE%\.local\bin` has to be on the **Windows user PATH** —
+a hook shell reads no rc file, so it inherits Claude Code's PATH and nothing
+else. `infra-llm --doctor` prints the exact command when it isn't.
 
 ```bash
 ./install.sh                 # CLI + MCP servers + plugins

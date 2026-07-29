@@ -13,7 +13,7 @@
 #   infra-llm --agent           # wire THIS repo instead (hooks + all agents)
 #   infra-llm --docs            # refresh only the instruction blocks
 #   infra-llm --status          # wiring + active plan + session records
-#   infra-llm --doctor          # does this machine (Linux/macOS/WSL) support it?
+#   infra-llm --doctor          # does this machine (Linux/WSL/macOS/Git Bash) support it?
 #   infra-llm --plan <slug>     # create infra-llm/plans/<slug>.md and register it
 #   infra-llm --steps           # what the stop hook thinks the next step is
 #   infra-llm --verify [args]   # run the verification gate
@@ -86,8 +86,33 @@ export LLM_INFRA_DIR
 LLM_HOOKS_DIR="${LLM_INFRA_DIR}/llm/hooks"
 LLM_SKILLS_DIR="${LLM_INFRA_DIR}/llm/skills"
 LLM_TEMPLATE="${LLM_INFRA_DIR}/llm/templates/instructions.md"
+
+# Which of the four supported environments this is - Linux, WSL, macOS, or a
+# bash on Windows (Git Bash / MSYS2 / Cygwin). Resolved once at load because two
+# things below depend on it: where Claude Code keeps its config, and whether a
+# path has to be translated before a native Windows program can read it.
+case "$(uname -s 2>/dev/null)" in
+  Darwin)               LLM_OS="macos" ;;
+  Linux)                LLM_OS="linux"
+                        if grep -qi microsoft /proc/version 2>/dev/null; then LLM_OS="wsl"; fi ;;
+  CYGWIN*|MINGW*|MSYS*) LLM_OS="windows" ;;
+  *)                    LLM_OS="linux" ;;
+esac
+
+# The home directory Claude Code itself uses. Everywhere but Windows that is
+# plainly $HOME. On Windows Claude Code is a native .exe reading %USERPROFILE%,
+# which is usually what Git Bash set HOME to but not always - a roaming profile,
+# HOMEDRIVE/HOMEPATH or a custom HOME in /etc/profile all move it, and when they
+# differ ~/.claude is a directory Claude Code never opens.
+LLM_HOME="$HOME"
+if [ "$LLM_OS" = windows ] && [ -n "$USERPROFILE" ] && command -v cygpath >/dev/null 2>&1; then
+  _llm_up="$(cygpath -u "$USERPROFILE" 2>/dev/null)"
+  [ -d "$_llm_up" ] && LLM_HOME="$_llm_up"
+  unset _llm_up
+fi
+
 # Where the infra-llm launcher is installed so hooks can find it on PATH
-LLM_BIN_DIR="${LLM_BIN_DIR:-$HOME/.local/bin}"
+LLM_BIN_DIR="${LLM_BIN_DIR:-$LLM_HOME/.local/bin}"
 # Every agent this knows how to wire up. Agents the repo shows no sign of are
 # still offered in the selection, so a repo can adopt one it doesn't use yet.
 LLM_AGENTS="claude codex cursor windsurf copilot gemini cline aider"
@@ -233,8 +258,33 @@ _llm_install_cli() {
 
   case ":$PATH:" in
     *":$LLM_BIN_DIR:"*) ;;
-    *) _llm_hm "$LLM_BIN_DIR is not on PATH - add it, or hooks won't find infra-llm" ;;
+    *) _llm_hm "$LLM_BIN_DIR is not on PATH - add it, or hooks won't find infra-llm"
+       _llm_path_advice ;;
   esac
+}
+
+# How to put LLM_BIN_DIR on PATH for the shell the HOOKS run in, which is not
+# necessarily this one. Claude Code runs a hook through a non-interactive shell
+# that reads no rc file, so what it gets is whatever PATH the Claude Code process
+# was started with. Editing an rc is enough on Linux/macOS/WSL, where Claude Code
+# is launched from a terminal that has already read it. On Windows it is not:
+# Claude Code is a native .exe usually started from outside any bash, so the
+# directory has to be on the WINDOWS user PATH before the Git Bash it spawns for
+# hooks can see it.
+_llm_path_advice() {
+  if [ "$LLM_OS" = windows ]; then
+    local win="$LLM_BIN_DIR"
+    command -v cygpath >/dev/null 2>&1 && win="$(cygpath -w "$LLM_BIN_DIR" 2>/dev/null || printf '%s' "$LLM_BIN_DIR")"
+    # Not `setx PATH "%PATH%;..."`: %PATH% is the merged system+user value, so
+    # that copies the system PATH into the user one and silently truncates the
+    # result at 1024 characters. Append to the user variable only.
+    printf '           add it to the Windows user PATH (PowerShell, once):\n'
+    printf '             [Environment]::SetEnvironmentVariable("Path",\n'
+    printf '               [Environment]::GetEnvironmentVariable("Path","User") + ";%s", "User")\n' "$win"
+    printf '           then restart Claude Code - hooks inherit its PATH, not your rc file\n'
+  else
+    printf '           echo '\''export PATH="%s:$PATH"'\'' >> ~/.bashrc\n' "$LLM_BIN_DIR"
+  fi
 }
 
 # ------------------------------------------------------------------ detection
@@ -1152,12 +1202,12 @@ _llm_wt_prep() {
 # ---------------------------------------------------------------- global block
 
 # Claude Code's own config directory: $CLAUDE_CONFIG_DIR when the user moved it,
-# ~/.claude otherwise. Following the same rule Claude Code does is what makes
-# this work unchanged on Linux, macOS, WSL and Git Bash on Windows - in every
-# one of them $HOME is the home the local Claude Code reads. (Native Windows
+# else .claude under the home Claude Code reads - $HOME on Linux, macOS and WSL,
+# %USERPROFILE% under a Windows bash (see LLM_HOME). Following the same rule
+# Claude Code does is what makes this work unchanged on all four. (Native Windows
 # without a bash can't run this script at all.)
 _llm_claude_home() {
-  printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  printf '%s\n' "${CLAUDE_CONFIG_DIR:-$LLM_HOME/.claude}"
 }
 
 # Printable form of a path under the Claude home - "~/.claude/x" reads better
@@ -1165,8 +1215,8 @@ _llm_claude_home() {
 _llm_claude_home_label() {
   local home; home="$(_llm_claude_home)"
   case "$home" in
-    "$HOME"/*) printf '~/%s\n' "${home#"$HOME"/}" ;;
-    *)         printf '%s\n' "$home" ;;
+    "$LLM_HOME"/*) printf '~/%s\n' "${home#"$LLM_HOME"/}" ;;
+    *)             printf '%s\n' "$home" ;;
   esac
 }
 
@@ -1666,16 +1716,20 @@ _llm_worktrees() {
 # hooks shell out to, then runs each hook for real - a syntax check proves
 # nothing about a BSD userland or a CRLF checkout.
 _llm_doctor() {
-  local fails=0 warns=0 os="unknown" tmp t path out
+  local fails=0 warns=0 os tmp t path out
 
-  case "$(uname -s 2>/dev/null)" in
-    Linux)  os="Linux"; grep -qi microsoft /proc/version 2>/dev/null && os="WSL (Linux on Windows)" ;;
-    Darwin) os="macOS" ;;
-    CYGWIN*|MINGW*|MSYS*) os="Windows (git-bash/msys)" ;;
+  case "$LLM_OS" in
+    linux)   os="Linux" ;;
+    wsl)     os="WSL (Linux on Windows)" ;;
+    macos)   os="macOS" ;;
+    windows) os="Windows (git-bash/msys)" ;;
+    *)       os="unknown" ;;
   esac
 
   echo "environment"
   printf '  os:       %s\n' "$os"
+  printf '  home:     %s%s\n' "$LLM_HOME" \
+    "$([ "$LLM_HOME" != "$HOME" ] && printf ' (%%USERPROFILE%%, not $HOME)')"
   printf '  version:  %s\n' "$LLM_VERSION"
   printf '  bash:     %s\n' "${BASH_VERSION:-unknown}"
   printf '  infra:    %s\n' "$LLM_INFRA_DIR"
@@ -1720,7 +1774,7 @@ _llm_doctor() {
 
   echo ""
   echo "optional tools"
-  for t in jq gh; do
+  for t in jq gh claude; do
     path="$(command -v "$t" 2>/dev/null)"
     if [ -n "$path" ]; then
       printf '  ok       %-8s %s\n' "$t" "$path"
@@ -1728,6 +1782,10 @@ _llm_doctor() {
       case "$t" in
         jq) _llm_hm "missing  jq - no session records, and the guards fall back to plain text matching" ;;
         gh) _llm_hm "missing  gh - /infra-llm-pr and /infra-llm-release use it to see and open PRs/releases" ;;
+        # Not fatal: everything here works for Codex and the other agents too.
+        # It does mean the hooks below are wired for a CLI this shell can't see -
+        # on Windows usually because %USERPROFILE%\.local\bin never reached PATH.
+        claude) _llm_hm "missing  claude - the CLI isn't on this shell's PATH (install.sh installs it into $LLM_HOME/.local/bin)" ;;
       esac
       warns=$((warns + 1))
     fi
@@ -1792,6 +1850,7 @@ _llm_doctor() {
     case ":$PATH:" in
       *":${LLM_BIN_DIR}:"*) printf '  ok       %s\n' "${LLM_BIN_DIR}/infra-llm" ;;
       *) _llm_no "${LLM_BIN_DIR} is not on PATH - hooks run non-interactively and won't find infra-llm"
+         _llm_path_advice
          fails=$((fails + 1)) ;;
     esac
   else

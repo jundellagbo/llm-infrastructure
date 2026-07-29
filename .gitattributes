@@ -1,7 +1,9 @@
-# These scripts are executed by bash on Linux, macOS and inside WSL. A CRLF
+# These scripts are executed by bash on Linux, WSL, macOS and Git Bash. A CRLF
 # checkout (Windows clients, or core.autocrlf=true) breaks them hard: the shebang
 # line becomes "#!/usr/bin/env bash\r" and the kernel reports "no such file".
-# Normalise to LF in the working tree everywhere, on every platform.
+# Git Bash is where that bites - it is a Windows client, so the default
+# autocrlf=true would rewrite every one of these on clone. Normalise to LF in the
+# working tree everywhere, on every platform.
 * text=auto eol=lf
 
 *.sh   text eol=lf
