@@ -25,6 +25,7 @@
 #   infra-llm --verify [args]   # run the verification gate
 #   infra-llm --sessions [id]   # list/print session records
 #   infra-llm --worktrees       # every worktree with its own plan state
+#   infra-llm git-window <purpose> [min]  # timed guard window so /infra-llm-pr|-release can push
 #   infra-llm --skill [name]    # print a skill (infra-llm-designer / -code)
 #   infra-llm --designer        # list the design skill here (--remove to drop it)
 #   infra-llm --code            # list the code-quality skill here (--remove to drop it)
@@ -133,6 +134,10 @@ LLM_ENV_FILE=".infra-llm.env"
 LLM_STATE_DIR="infra-llm"
 LLM_PLANS_DIR="$LLM_STATE_DIR/plans"
 LLM_SESSIONS_DIR="$LLM_STATE_DIR/sessions"
+# Per-repo scratch for the pr/release commands: draft PR bodies, release notes,
+# the git-window marker. Inside the state dir so the one infra-llm/ ignore entry
+# covers it, but disposable - safe to delete whole at any time.
+LLM_TMPS_DIR="$LLM_STATE_DIR/tmps"
 # Earlier layouts, newest first. A repo on either keeps working until --init
 # migrates it, so an upgrade never strands an active plan mid-session.
 LLM_PLANS_DIRS_OLD="infra-llm-plans plans"
@@ -142,7 +147,7 @@ LLM_SESSIONS_DIRS_OLD="infra-llm-sessions .claude/sessions"
 # launcher on PATH and answers "unknown command" for anything added since -
 # comparing this against the value in the file on disk is how --doctor catches
 # that.
-LLM_VERSION="2026-07-24.2"
+LLM_VERSION="2026-08-07.2"
 # Skills are installed under their directory name, prefixed so every piece of
 # this workflow sorts together in a Claude config dir shared with other skills.
 # Skills a past --global installed that are no longer machine-wide skills -
@@ -726,6 +731,8 @@ _llm_env_file() {
 # Git guard (PreToolUse): deny = block agent git writes, ask = the user
 # confirms each one, off = no guard. Destructive commands (force push, hard
 # reset, clean, history rewriting) stay denied unless the guard is off.
+# /infra-llm-pr and /infra-llm-release push directly through a timed window
+# (infra-llm git-window); delete infra-llm/tmps/.git-window to revoke one.
 #GIT_GUARD=deny
 
 # Git subcommands this repo lets the agent run anyway, space separated.
@@ -746,7 +753,7 @@ _llm_ignore_entries() {
   sessions="$(_llm_sessions_dir "$root")"
   case "$plans/$sessions" in
     "$LLM_PLANS_DIR/$LLM_SESSIONS_DIR") printf '%s/ %s\n' "$LLM_STATE_DIR" "$LLM_ENV_FILE" ;;
-    *)                                  printf '%s/ %s %s/\n' "$plans" "$LLM_ENV_FILE" "$sessions" ;;
+    *)                                  printf '%s/ %s %s/ %s/\n' "$plans" "$LLM_ENV_FILE" "$sessions" "$LLM_TMPS_DIR" ;;
   esac
 }
 
@@ -837,6 +844,53 @@ _llm_other_ignores() {
     _llm_ignore_file "$root/$f" "$f" keep $entries
   done
   return 0
+}
+
+# ------------------------------------------------------------------ git window
+
+# A short-lived, purposed permission for the git guard. /infra-llm-pr and
+# /infra-llm-release push to the remote themselves; everything else still
+# treats git as the user's decision. The window is how both stay true: those
+# commands open one right before committing, the guard lets non-destructive
+# git through while it is open, and it expires on its own so a forgotten
+# window can't leave the guard open. Destructive commands (force push, hard
+# reset, clean, history rewriting) stay denied window or no window.
+#
+#   infra-llm git-window <purpose> [minutes]   open (default 30 minutes)
+#   infra-llm git-window --close               close now
+#   infra-llm git-window                       show state
+LLM_GIT_WINDOW=".git-window"
+_llm_git_window() {
+  local root purpose="${1:-}" mins="${2:-30}" file now exp label
+  root="$(_llm_target)"
+  file="$root/$LLM_TMPS_DIR/$LLM_GIT_WINDOW"
+  now="$(date +%s)"
+  case "$purpose" in
+    --close|close)
+      rm -f "$file" 2>/dev/null
+      _llm_ok "git window closed"
+      return 0 ;;
+    "")
+      if [ -f "$file" ]; then
+        read -r exp label < "$file" 2>/dev/null
+        if [ "$now" -lt "${exp:-0}" ] 2>/dev/null; then
+          _llm_ok "git window open for ${label:-?} - $(( (exp - now + 59) / 60 )) min left"
+        else
+          rm -f "$file"
+          echo "git window had expired - closed"
+        fi
+      else
+        echo "no git window open"
+      fi
+      return 0 ;;
+  esac
+  case "$mins" in ''|*[!0-9]*) _llm_no "minutes must be a number: $mins"; return 1 ;; esac
+  mkdir -p "$root/$LLM_TMPS_DIR"
+  # Keep the scratch dir out of git even in a repo --init never prepared.
+  git -C "$root" rev-parse --git-dir >/dev/null 2>&1 \
+    && _llm_ignore_file "$root/.gitignore" ".gitignore" create "$LLM_STATE_DIR/" >/dev/null
+  printf '%s %s\n' "$(( now + mins * 60 ))" "$purpose" > "$file"
+  _llm_ok "git window open for $purpose - ${mins} min (commit/push/tag allowed; destructive still denied)"
 }
 
 # ------------------------------------------------------------ slash commands
@@ -1030,9 +1084,25 @@ _llm_migrate_state() {
 }
 
 _llm_repo_state() {
-  local root="$1" old
+  local root="$1" old f tmp
   _llm_migrate_state "$root"
-  mkdir -p "$root/$(_llm_plans_dir "$root")"
+
+  # The tmps dir briefly lived at .infra-llm-tmps/ in the repo root - it holds
+  # only disposable scratch, so fold it away and drop the ignore entries that
+  # pointed at it. The state-dir entry covers the new home.
+  if [ -e "$root/.infra-llm-tmps" ]; then
+    rm -rf "$root/.infra-llm-tmps"
+    _llm_ok "removed  .infra-llm-tmps/ (tmps now live in $LLM_TMPS_DIR/)"
+  fi
+  for f in .gitignore $LLM_IGNORE_FILES; do
+    [ -f "$root/$f" ] || continue
+    grep -qxF '.infra-llm-tmps/' "$root/$f" 2>/dev/null || continue
+    tmp="$(_llm_tmp)"
+    grep -vxF '.infra-llm-tmps/' "$root/$f" > "$tmp" && mv "$tmp" "$root/$f"
+    _llm_ok "dropped  .infra-llm-tmps/ from $f"
+  done
+
+  mkdir -p "$root/$(_llm_plans_dir "$root")" "$root/$LLM_TMPS_DIR"
   _llm_env_file "$root"
   _llm_wt_prep "$root"
   _llm_gitignore "$root"
@@ -1082,6 +1152,7 @@ _llm_init_state() {
   _llm_ok "repo ready"
   printf '  plans:    %-18s (plan files + .active-plan, git-ignored)\n' "$(_llm_plans_dir "$root")/"
   printf '  sessions: %-18s (one file per session, last 10)\n' "$(_llm_sessions_dir "$root")/"
+  printf '  tmps:     %-18s (pr/release scratch + git window, git-ignored)\n' "$LLM_TMPS_DIR/"
   echo "  tune:     $LLM_ENV_FILE     (VERIFY_CMD, git guard - all optional)"
   [ -n "$doc" ] && printf '  docs:     %-18s (the protocol, between the infra-llm markers)\n' "$doc"
   printf '  ignored:  %s\n' "$(_llm_ignored_in "$root")"
@@ -2207,6 +2278,7 @@ infra-llm() {
     --sessions|sessions)   _llm_sessions "$@" ;;
     --worktrees|--worktree|--wt|worktrees|wt) _llm_worktrees ;;
     --wt-prep)             _llm_wt_prep "$@" ;;
+    --git-window|git-window) _llm_git_window "$@" ;;
     --skill|skill)         _llm_skill "$@" ;;
     --designer|designer)   _llm_designer "$@" ;;
     --code|code)           _llm_code "$@" ;;

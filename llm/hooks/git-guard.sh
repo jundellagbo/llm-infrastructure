@@ -15,6 +15,12 @@
 #   GIT_GUARD=off    # guard disabled (destructive commands still denied)
 #   GIT_GUARD_ALLOW="tag stash"   # subcommands to let through in this repo
 #
+# The /infra-llm-pr and /infra-llm-release commands push to the remote
+# themselves: they open a timed window first ("infra-llm git-window pr", a
+# "<expiry-epoch> <purpose>" marker in infra-llm/tmps/.git-window) and
+# non-destructive mutating git is allowed while it is open. Destructive
+# commands are denied window or no window.
+#
 # GIT_GUARD / GIT_GUARD_ALLOW in the environment win over the file, so a repo
 # can be relaxed for one session without editing anything.
 #
@@ -126,10 +132,26 @@ decide() {
   exit 0
 }
 
-hint="Make the file changes only and say what changed; the user reviews and runs git themselves (in Claude Code they can type '! git add -A && git commit'). The /infra-llm-pr and /infra-llm-release commands prepare the PR/release for the user to push."
+hint="Make the file changes only and say what changed; the user reviews and runs git themselves (in Claude Code they can type '! git add -A && git commit'). Exception: the /infra-llm-pr and /infra-llm-release commands push directly - they open a timed window first with 'infra-llm git-window pr|release'."
 
 if [ "$destructive" -eq 1 ]; then
   decide deny "Blocked: '${matched}' here is destructive/irreversible (force push, hard reset, clean, history rewrite, branch delete, discarding working-tree changes). The agent must never run it. $hint"
+fi
+
+# An open, unexpired git window (written by "infra-llm git-window <purpose>")
+# lets the pr/release flows commit, push and tag without a stop at each step.
+# Scoped tight on purpose: only matched non-destructive git subcommands, only
+# until the expiry stamp, and the marker fails closed - missing, malformed or
+# expired all fall through to the normal decision. An expired marker is
+# removed so it can't shadow a later window's state.
+win="$proj/infra-llm/tmps/.git-window"
+if [ -f "$win" ]; then
+  win_exp=""
+  read -r win_exp _ < "$win" 2>/dev/null
+  if [ "$(date +%s)" -lt "${win_exp:-0}" ] 2>/dev/null; then
+    decide allow "git window open (infra-llm git-window) - 'git ${matched}' allowed for the pr/release flow."
+  fi
+  rm -f "$win" 2>/dev/null
 fi
 
 if [ "$mode" = "ask" ]; then

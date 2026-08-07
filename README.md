@@ -29,9 +29,12 @@ place. It marks a step done with `infra-llm --step-done` (flips the first
 unchecked box) instead of re-typing the checkbox line.
 
 **Guards, not vibes.** A git guard denies agent-run commit/push/tag; the agent
-leaves work in the tree and reports it. An optional search guard nudges toward
-codebase-memory over raw grep. Session records for the last 10 sessions land in
-`infra-llm/sessions/`.
+leaves work in the tree and reports it. The pr/release commands are the one
+exception: they open a timed window (`infra-llm git-window pr|release`) and push
+directly once every blocker is clear — destructive commands stay denied even
+then. An optional search guard nudges toward codebase-memory over raw grep.
+Session records for the last 10 sessions land in `infra-llm/sessions/`; command
+scratch (PR bodies, release notes, the window marker) lands in `infra-llm/tmps/`.
 
 **Opt-in skills.** `infra-llm --global` installs every skill machine-wide,
 including `infra-llm-designer` (UI: impeccable + motion + a real-browser check)
@@ -46,8 +49,11 @@ Four slash commands, each self-contained:
 
 - `/infra-llm-plan <path | plan>` — start and run a plan (above). Any other
   prompt runs normally, with no planning.
-- `/infra-llm-pr`, `/infra-llm-release`, `/infra-llm-review` — the agent gathers
-  repo state via git/gh, prepares the work, and hands the git actions to you.
+- `/infra-llm-pr`, `/infra-llm-release` — the agent gathers repo state via
+  git/gh, clears every blocker (verify green, no duplicate PR/tag), then commits,
+  pushes and opens the PR/release itself through a timed git-guard window.
+- `/infra-llm-review` — the agent gathers the diff via git, reviews by priority
+  and applies confirmed fixes to the working tree (never commits).
 
 Everything else is the `infra-llm` CLI (a terminal, or `! infra-llm …` in Claude
 Code): `verify`, `steps`, `step-done`, `status`, `sessions`, `worktrees`,

@@ -1,3 +1,4 @@
 # infra-llm workflow state (per machine, never committed)
 infra-llm/
 .infra-llm.env
+.codebase-memory
