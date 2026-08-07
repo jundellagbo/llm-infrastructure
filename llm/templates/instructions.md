@@ -6,6 +6,14 @@ MUSTs. Write plan files yourself; use `skill-creator` only for a skill,
 instruction file or command, whose frontmatter description decides whether it
 ever triggers.
 
+**Code comments.** A comment earns its place only by saying something the code
+cannot: non-obvious business logic, an architectural decision, a workaround for
+an external limitation, an unusual edge case, or the reason *why* when it isn't
+inferable. Everything else is noise — never narrate the next line, never restate
+what a clear name already says, and reach for a better name before a comment.
+Editing existing code, add no comment unless it clears one of those bars, and
+never one that only describes your change.
+
 **Don't edit what infra-llm generates.** This block (between the `infra-llm`
 markers) and any skill or hook it installed are copies — edits are lost on the
 next refresh and never reach the other repos. Change the source in the infra

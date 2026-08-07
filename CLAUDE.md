@@ -1,57 +1,53 @@
 <!-- infra-llm:start -->
 
-**Writing plans and instructions.** Everything an agent re-reads later — a plan
-file, this block, a skill, a brief — is short, direct and paragraph-first. Say
-what to do and why it matters, then stop; padding is paid for on every future run
-and buries the line that mattered. A plan step is one line naming a concrete
-outcome, with detail underneath only where it isn't obvious, and prose around it
-stays a couple of sentences. Explaining the reason beats stacking MUSTs. Write
-plan files yourself and get on with the work — use the `skill-creator` skill only
-for a **skill, instruction file or command**, whose frontmatter description
-decides whether it ever triggers.
+**Writing plans and instructions.** Everything an agent re-reads — a plan file,
+this block, a skill, a brief — is short and paragraph-first: say what to do and
+why, then stop; padding is paid on every run. A plan step is one line naming an
+outcome, detail underneath only where it isn't obvious. Reasons beat stacked
+MUSTs. Write plan files yourself; use `skill-creator` only for a skill,
+instruction file or command, whose frontmatter description decides whether it
+ever triggers.
 
-**Don't edit what infra-llm generates.** This block (everything between the
-`infra-llm` markers) and any skill or hook it installed are copies: edits are
-lost on the next refresh and never reach the other repos. Change the source in
-the infra checkout and re-run `infra-llm --docs`; if that isn't yours to change,
-say what needs changing instead of patching the copy.
+**Code comments.** A comment earns its place only by saying something the code
+cannot: non-obvious business logic, an architectural decision, a workaround for
+an external limitation, an unusual edge case, or the reason *why* when it isn't
+inferable. Everything else is noise — never narrate the next line, never restate
+what a clear name already says, and reach for a better name before a comment.
+Editing existing code, add no comment unless it clears one of those bars, and
+never one that only describes your change.
+
+**Don't edit what infra-llm generates.** This block (between the `infra-llm`
+markers) and any skill or hook it installed are copies — edits are lost on the
+next refresh and never reach the other repos. Change the source in the infra
+checkout and re-run `infra-llm --docs`, or say what needs changing.
 
 **Git is the user's decision.** Never run a repository-mutating git command —
-commit, push, merge, rebase, reset, checkout, branch or tag creation, stash,
-history rewriting. Leave the work in the tree and say what changed. Read-only git
-(`status`, `diff`, `log`, `show`, `blame`) is encouraged. A guard hook enforces
-this; don't route around it with aliases or wrappers. Never put AI/LLM
-attribution in a commit message, tag, release note or PR body.
+commit, push, merge, rebase, reset, checkout, branch/tag creation, stash or
+history rewriting. Leave the work in the tree and say what changed; read-only git
+(`status`, `diff`, `log`, `show`, `blame`) is fine. A guard hook enforces this —
+don't route around it. Never put AI/LLM attribution in a commit, tag, release
+note or PR.
 
-Pull requests and code review are on-request only — each has its own command that
-prints a brief when you run it, so there is no copy of it here to drift out of
-date. Review is on request, never a gate on finishing a task.
+**Browser work.** To open, inspect, screenshot or debug a page, drive the Chrome
+the user already has open: the `chrome-devtools` MCP server is registered with
+`--autoConnect` on their logged-in profile — open a new tab there, never ask
+which browser, never launch a second. Check which browser you got first: with
+remote debugging off the server silently attaches to a throwaway profile, so a
+page list of one `about:blank` and none of their tabs means you're in it — stop,
+say so, and give the fix: open `chrome://inspect/#remote-debugging` (Chrome
+144+), enable remote debugging, restart Chrome, restart the session.
+`DevToolsActivePort` persists when the toggle goes off so proves nothing, and
+`--remote-debugging-port` is ignored on the default user data dir since Chrome
+136.
 
-**Browser work.** Asked to open, inspect, screenshot or debug a page, drive the
-Chrome the user already has open: the `chrome-devtools` MCP server is registered
-with `--autoConnect` and attaches to their logged-in profile, so open a new tab
-there. Never ask which browser or profile to use and never launch a second one.
-Check which browser you got before reporting anything — with remote debugging off
-the server silently attaches to a throwaway profile and every call still
-succeeds, so a page list holding one `about:blank` and none of their tabs means
-you are in that scratch profile. Stop there, say so, and give them the fix: open
-`chrome://inspect/#remote-debugging` (Chrome 144+), enable remote debugging,
-restart Chrome, then restart the agent session. `DevToolsActivePort` is left
-behind when the toggle goes off, so its existence proves nothing, and
-`--remote-debugging-port` is not a workaround — Chrome has ignored it on the
-default user data dir since version 136.
+**Codebase memory.** When `codebase-memory-mcp` tools are available, use them to
+find code — `search_code`, `search_graph`, `trace_path`, `get_code_snippet`
+answer structural questions off an index. Index once (`index_repository`); fall
+back to Grep/Glob otherwise.
 
-**Codebase memory.** When the `codebase-memory-mcp` tools are available, use them
-to find code — `search_code`, `search_graph`, `trace_path`, `get_code_snippet`
-answer structural questions off an index instead of re-reading files. Index the
-repo once (`index_repository`) and fall back to Grep/Glob when the tools aren't
-there.
-
-**Worktrees.** `infra-llm/` is untracked, so every worktree has its own active
-plan and session history and parallel agents don't collide. Work only in the
-worktree you were started in: never edit another worktree's plan files, and never
-assume a plan you can't see here. `infra-llm --worktrees` lists them. Session
-records for the last 10 sessions land in `infra-llm/sessions/<session-id>.md` —
-read them to recover what an earlier session was asked to do.
+**Worktrees.** `infra-llm/` is untracked, so each worktree has its own plan and
+session history. Work only in the worktree you were started in — never edit
+another's plan files or assume a plan you can't see. `infra-llm --worktrees`
+lists them; session records land in `infra-llm/sessions/<id>.md`.
 
 <!-- infra-llm:end -->
