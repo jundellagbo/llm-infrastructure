@@ -728,15 +728,16 @@ _llm_env_file() {
 # tool, framework or test runner is assumed.
 #VERIFY_CMD="<this repo's lint/type-check/test command>"
 
-# Git guard (PreToolUse): deny = block agent git writes, ask = the user
-# confirms each one, off = no guard. Destructive commands (force push, hard
-# reset, clean, history rewriting) stay denied unless the guard is off.
-# /infra-llm-pr and /infra-llm-release push directly through a timed window
-# (infra-llm git-window); delete infra-llm/tmps/.git-window to revoke one.
+# Git guard (PreToolUse): deny = block agent commits, ask = the user confirms
+# each one, off = no guard. Push and other git always pass. Destructive commands
+# (force push, hard reset, clean, history rewriting) stay denied unless the
+# guard is off. /infra-llm-pr and /infra-llm-release commit directly through a
+# timed window (infra-llm git-window); delete infra-llm/tmps/.git-window to
+# revoke one.
 #GIT_GUARD=deny
 
-# Git subcommands this repo lets the agent run anyway, space separated.
-#GIT_GUARD_ALLOW="tag stash"
+# Set to "commit" to let the agent commit in this repo anyway.
+#GIT_GUARD_ALLOW="commit"
 ENV
   _llm_ok "wrote    $LLM_ENV_FILE"
 }

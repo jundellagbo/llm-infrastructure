@@ -28,11 +28,11 @@ line — the next step — so the agent never re-fetches the whole plan to find 
 place. It marks a step done with `infra-llm --step-done` (flips the first
 unchecked box) instead of re-typing the checkbox line.
 
-**Guards, not vibes.** A git guard denies agent-run commit/push/tag; the agent
-leaves work in the tree and reports it. The pr/release commands are the one
-exception: they open a timed window (`infra-llm git-window pr|release`) and push
-directly once every blocker is clear — destructive commands stay denied even
-then. An optional search guard nudges toward codebase-memory over raw grep.
+**Guards, not vibes.** A git guard denies agent-run commits and destructive git
+(force push, hard reset, history rewrites); push and other git pass through, and
+the user makes every commit. The pr/release commands are the one exception: they
+open a timed window (`infra-llm git-window pr|release`) and commit directly once
+every blocker is clear — destructive commands stay denied even then. An optional search guard nudges toward codebase-memory over raw grep.
 Session records for the last 10 sessions land in `infra-llm/sessions/`; command
 scratch (PR bodies, release notes, the window marker) lands in `infra-llm/tmps/`.
 
@@ -104,7 +104,8 @@ step needs `npx`.
   open, on your logged-in profile. One manual step (Chrome 144+): open
   `chrome://inspect/#remote-debugging`, enable remote debugging, restart Chrome,
   restart the agent session. `install.sh` probes afterward and reports whether
-  it's live. The `chrome-devtools-mcp` plugin is deliberately not installed — it
+  it's live. Its tools are pre-approved (`mcp__chrome-devtools` in
+  `permissions.allow`), so Claude Code never asks again. The `chrome-devtools-mcp` plugin is deliberately not installed — it
   hardcodes a fresh-profile launch that ignores the registered server.
 - **`codebase-memory-mcp`** — a tree-sitter knowledge graph for structural
   queries (who calls this, where it's defined, what a change breaks). A static

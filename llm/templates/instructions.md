@@ -1,49 +1,40 @@
-**Writing plans and instructions.** Everything an agent re-reads — a plan file,
-this block, a skill, a brief — is short and paragraph-first: say what to do and
-why, then stop; padding is paid on every run. A plan step is one line naming an
-outcome, detail underneath only where it isn't obvious. Reasons beat stacked
+**Writing plans and instructions.** Anything an agent re-reads (plan, this
+block, skill, brief) is short and paragraph-first: what to do and why, then
+stop. A plan step is one line naming an outcome. Give reasons, not stacked
 MUSTs. Write plan files yourself; use `skill-creator` only for a skill,
-instruction file or command, whose frontmatter description decides whether it
-ever triggers.
+instruction file or command.
 
-**Code comments.** A comment earns its place only by saying something the code
-cannot: non-obvious business logic, an architectural decision, a workaround for
-an external limitation, an unusual edge case, or the reason *why* when it isn't
-inferable. Everything else is noise — never narrate the next line, never restate
-what a clear name already says, and reach for a better name before a comment.
-Editing existing code, add no comment unless it clears one of those bars, and
-never one that only describes your change.
+**Code comments.** At most one comment per method, above it, only when needed,
+saying what the method does - never how it is used or example values from the
+task. No comments inside function bodies. When a method changes, update its
+comment; never add one that only describes your change.
+
+**No em dashes.** Never write an em dash (—) in code, comments, docs, commits or
+replies. Use a plain hyphen `-`.
 
 **Don't edit what infra-llm generates.** This block (between the `infra-llm`
-markers) and any skill or hook it installed are copies — edits are lost on the
-next refresh and never reach the other repos. Change the source in the infra
-checkout and re-run `infra-llm --docs`, or say what needs changing.
+markers) and any skill or hook it installed are copies, overwritten on refresh.
+Change the source in the infra checkout and run `infra-llm --docs`.
 
-**Git is the user's decision.** Never run a repository-mutating git command —
-commit, push, merge, rebase, reset, checkout, branch/tag creation, stash or
-history rewriting. Leave the work in the tree and say what changed; read-only git
-(`status`, `diff`, `log`, `show`, `blame`) is fine. A guard hook enforces this —
-don't route around it. Never put AI/LLM attribution in a commit, tag, release
-note or PR.
+**Commits are the user's.** Never run `git commit` - leave work in the tree and
+say what changed. Push and other git are fine; nothing destructive (force push,
+`reset --hard`, history rewrites). A guard hook enforces this - don't route
+around it. No AI attribution in commits, tags, release notes or PRs.
 
-**Browser work.** To open, inspect, screenshot or debug a page, drive the Chrome
-the user already has open: the `chrome-devtools` MCP server is registered with
-`--autoConnect` on their logged-in profile — open a new tab there, never ask
-which browser, never launch a second. Check which browser you got first: with
-remote debugging off the server silently attaches to a throwaway profile, so a
-page list of one `about:blank` and none of their tabs means you're in it — stop,
-say so, and give the fix: open `chrome://inspect/#remote-debugging` (Chrome
-144+), enable remote debugging, restart Chrome, restart the session.
-`DevToolsActivePort` persists when the toggle goes off so proves nothing, and
-`--remote-debugging-port` is ignored on the default user data dir since Chrome
-136.
+**Browser work.** Drive the user's open Chrome through the `chrome-devtools` MCP
+in a new tab; never ask which browser or launch another. Browser access and
+remote debugging are pre-approved - never ask to allow them again. Only if the
+page list is a lone `about:blank` (throwaway profile), tell the user to enable
+remote debugging at `chrome://inspect/#remote-debugging` and restart Chrome and
+the session.
 
-**Codebase memory.** When `codebase-memory-mcp` tools are available, use them to
-find code — `search_code`, `search_graph`, `trace_path`, `get_code_snippet`
-answer structural questions off an index. Index once (`index_repository`); fall
-back to Grep/Glob otherwise.
+**Temp files.** Put every scratch file (screenshots, logs, dumps, throwaway
+scripts) in the git-ignored `infra-llm/tmps/`, never the repo tree or `/tmp`.
 
-**Worktrees.** `infra-llm/` is untracked, so each worktree has its own plan and
-session history. Work only in the worktree you were started in — never edit
-another's plan files or assume a plan you can't see. `infra-llm --worktrees`
-lists them; session records land in `infra-llm/sessions/<id>.md`.
+**Codebase memory.** When `codebase-memory-mcp` is available, run
+`index_repository` once and find code with `search_code`, `search_graph`,
+`trace_path`, `get_code_snippet`; otherwise use Grep/Glob.
+
+**Worktrees.** Each worktree has its own untracked `infra-llm/` plans and
+sessions. Work only in the one you started in; `infra-llm --worktrees` lists
+them.

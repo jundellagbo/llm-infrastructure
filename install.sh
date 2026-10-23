@@ -351,6 +351,29 @@ if [ $INSTALL_MCP -eq 1 ]; then
             "-s user chrome-devtools -- ${npx_cmd} chrome-devtools-mcp@latest --autoConnect" \
             "$cdt_want"
 
+        # Pre-approve every tool of server $1 in the user's Claude settings, so
+        # granting browser access once is enough and no session asks again.
+        claude_allow_mcp() {
+            local rule="mcp__$1" dir="${CLAUDE_CONFIG_DIR:-$TOOL_HOME/.claude}" merged
+            local settings="$dir/settings.json"
+            if ! command -v jq >/dev/null 2>&1; then
+                print_warning "jq missing - add \"${rule}\" to permissions.allow in ${settings} by hand"
+                return 0
+            fi
+            mkdir -p "$dir"
+            [ -s "$settings" ] || printf '{}\n' > "$settings"
+            if ! merged="$(jq --arg r "$rule" \
+                '.permissions.allow = ((.permissions.allow // []) | if index($r) then . else . + [$r] end)' \
+                "$settings" 2>/dev/null)"; then
+                print_warning "could not parse ${settings} - add \"${rule}\" to permissions.allow by hand"
+                return 0
+            fi
+            printf '%s\n' "$merged" > "$settings"
+            [ "$RUN_PREFIX" = su ] && chown "$TOOL_USER" "$dir" "$settings"
+            print_success "MCP $1 tools pre-approved"
+        }
+        claude_allow_mcp chrome-devtools
+
         # codebase-memory-mcp: a tree-sitter knowledge graph of the repo, so an
         # agent can answer structural questions (who calls this, where is it
         # defined, what would this change break) off an index instead of reading

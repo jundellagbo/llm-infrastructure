@@ -20,7 +20,7 @@ the plan file IS the checklist, and everything under `infra-llm/` is git-ignored
 | `stop` | `steps-stop.sh` | Claude `Stop`: returns `{"decision":"block"}` with the next step, or demands verification |
 | `codex-stop` | `codex-stop.sh` | Codex `Stop`: returns `{"continue":false,"stopReason":…}` to auto-continue |
 | `session` | `session-record.sh` | `SessionEnd`: writes `infra-llm/sessions/<id>.md` (date, id, every task asked for), keeping the 10 most recent |
-| `git-guard` | `git-guard.sh` | `PreToolUse(Bash)`: denies agent-run git writes; read-only git and non-git commands pass through |
+| `git-guard` | `git-guard.sh` | `PreToolUse(Bash)`: denies agent-run `git commit` and destructive git; push, other git and non-git commands pass through |
 | `cbm-hint` | `cbm-hint.sh` | `PreToolUse(Grep\|Glob)`: **opt-in** (`--cbm-hint`), non-blocking. Once per session, nudges toward codebase-memory-mcp when installed; never denies |
 | `steps` | `steps-status.sh` | Prints `NO_PLAN`, `UNPLANNED\|<file>`, `REMAINING\|<file>\|<n>\|<next>` or `NEEDS_VERIFY\|<file>` |
 | `verify` | `verify-build.sh` | Runs `VERIFY_CMD` (nothing if unset — no build tool or runtime is assumed) and clears `.active-plan` |
